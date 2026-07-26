@@ -32,6 +32,7 @@ All endpoints require `Authorization: Bearer <api-key>`. For `GET` requests the 
 | DELETE | `/api/notes/<path>` | Move a note to trash (respects the system/Obsidian trash setting). |
 | GET | `/api/resolve?path=<linkpath>&source=<note>` | Resolve a wiki/markdown link to a real vault path (shortest-path aware). |
 | GET | `/api/assets/<path>` | Serve a vault file as binary (images, PDF, audio, video). |
+| POST | `/api/assets?filename=<name>&folder=assets` | Upload raw bytes (`Content-Type: application/octet-stream`) as a vault file. Defaults to `assets/`; auto-renames on conflict. |
 | GET | `/api/daily-notes/config` | Daily-notes folder + filename format. |
 
 ### Examples

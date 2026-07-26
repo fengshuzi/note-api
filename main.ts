@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, normalizePath } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, getAllTags, normalizePath } from 'obsidian';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
@@ -179,6 +179,37 @@ export default class NoteBridgePlugin extends Plugin {
 		this.sendBinary(res, 200, Buffer.from(data), this.contentTypeFor(abstract.extension));
 	}
 
+	private async uploadAsset(req: IncomingMessage, res: ServerResponse, url: URL) {
+		const filename = url.searchParams.get('filename') ?? '';
+		const safeName = filename.replace(/[\\/:*?"<>|]/g, '-').trim();
+		if (!safeName || safeName.includes('..')) {
+			this.sendJson(res, 400, { error: 'Invalid filename' });
+			return;
+		}
+		const folder = (url.searchParams.get('folder') ?? 'assets').replace(/\/+$/, '');
+		if (folder.includes('..') || folder.startsWith('/')) {
+			this.sendJson(res, 400, { error: 'Invalid folder' });
+			return;
+		}
+		const body = await this.readBody(req);
+		const data = Buffer.from(body, 'binary');
+		if (data.length === 0) {
+			this.sendJson(res, 400, { error: 'Empty body' });
+			return;
+		}
+		await this.ensureParentFolders(`${folder}/.keep`);
+		let target = `${folder}/${safeName}`;
+		if (this.app.vault.getAbstractFileByPath(target)) {
+			const dot = safeName.lastIndexOf('.');
+			const stem = dot > 0 ? safeName.slice(0, dot) : safeName;
+			const ext = dot > 0 ? safeName.slice(dot) : '';
+			target = `${folder}/${stem}-${Date.now()}${ext}`;
+		}
+		const arrayBuffer: ArrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.length);
+		const file = await this.app.vault.createBinary(target, arrayBuffer);
+		this.sendJson(res, 201, { path: file.path });
+	}
+
 	private resolveLink(res: ServerResponse, url: URL) {
 		const linkpath = url.searchParams.get('path') ?? '';
 		const source = url.searchParams.get('source') ?? '';
@@ -192,6 +223,24 @@ export default class NoteBridgePlugin extends Plugin {
 		} else {
 			this.sendJson(res, 404, { error: 'Cannot resolve link' });
 		}
+	}
+
+	private listTags(res: ServerResponse) {
+		// Vault-wide tag counts from the metadata cache: independent of any
+		// client-side filtering, includes frontmatter and inline tags.
+		const counts: Record<string, number> = {};
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			const tags = cache ? getAllTags(cache) : null;
+			if (!tags) continue;
+			for (const tag of new Set(tags)) {
+				counts[tag] = (counts[tag] ?? 0) + 1;
+			}
+		}
+		const tags = Object.entries(counts)
+			.map(([tag, count]) => ({ tag, count }))
+			.sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : 1));
+		this.sendJson(res, 200, { tags });
 	}
 
 	private isAuthorized(req: IncomingMessage): boolean {
@@ -273,8 +322,18 @@ export default class NoteBridgePlugin extends Plugin {
 				return;
 			}
 
+			if (method === 'POST' && path === '/api/assets') {
+				await this.uploadAsset(req, res, url);
+				return;
+			}
+
 			if (method === 'GET' && path === '/api/resolve') {
 				this.resolveLink(res, url);
+				return;
+			}
+
+			if (method === 'GET' && path === '/api/tags') {
+				this.listTags(res);
 				return;
 			}
 
