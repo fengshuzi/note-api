@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, getAllTags, normalizePath } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, TFile, TFolder, getAllTags, normalizePath } from 'obsidian';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
@@ -569,6 +569,99 @@ class NoteBridgeSettingTab extends PluginSettingTab {
 	constructor(app: App, plugin: NoteBridgePlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+	}
+
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: 'Server status',
+				render: (setting) => {
+					setting
+						.setDesc(
+							this.plugin.isRunning()
+								? `Running on http://127.0.0.1:${this.plugin.settings.port}`
+								: 'Stopped'
+						)
+						.addButton((button) =>
+							button
+								.setButtonText(this.plugin.isRunning() ? 'Stop' : 'Start')
+								.onClick(() => {
+									void this.plugin.toggleServer().then(() => this.update());
+								})
+						);
+				},
+			},
+			{
+				name: 'Port',
+				desc: 'Localhost port for the HTTP API. Restart required.',
+				render: (setting) => {
+					setting
+						.addText((text) =>
+							text
+								.setPlaceholder(String(DEFAULT_SETTINGS.port))
+								.setValue(String(this.plugin.settings.port))
+								.onChange(async (value) => {
+									const port = Number.parseInt(value, 10);
+									if (Number.isInteger(port) && port > 1024 && port < 65536) {
+										this.plugin.settings.port = port;
+										await this.plugin.saveSettings();
+									}
+								})
+						)
+						.addButton((button) =>
+							button.setButtonText('Apply & restart').onClick(() => {
+								this.plugin.restartServer();
+								this.update();
+							})
+						);
+				},
+			},
+			{
+				name: 'API key',
+				desc: 'Required for every request: Authorization: Bearer <key>',
+				render: (setting) => {
+					setting
+						.addText((text) => {
+							text.setValue(this.plugin.settings.apiKey).onChange(async (value) => {
+								this.plugin.settings.apiKey = value.trim();
+								await this.plugin.saveSettings();
+							});
+							text.inputEl.type = 'password';
+							text.inputEl.addClass('note-api-api-key-input');
+						})
+						.addButton((button) =>
+							button.setButtonText('Copy').onClick(() => {
+								void navigator.clipboard.writeText(this.plugin.settings.apiKey).then(() => {
+									new Notice('API key copied');
+								});
+							})
+						)
+						.addButton((button) =>
+							button
+								.setButtonText('Regenerate')
+								.setWarning()
+								.onClick(async () => {
+									this.plugin.settings.apiKey = generateApiKey();
+									await this.plugin.saveSettings();
+									new Notice('New API key generated');
+									this.update();
+								})
+						);
+				},
+			},
+			{
+				name: 'Start on launch',
+				desc: 'Automatically start the HTTP server when the vault opens.',
+				render: (setting) => {
+					setting.addToggle((toggle) =>
+						toggle.setValue(this.plugin.settings.autoStart).onChange(async (value) => {
+							this.plugin.settings.autoStart = value;
+							await this.plugin.saveSettings();
+						})
+					);
+				},
+			},
+		];
 	}
 
 	display(): void {

@@ -1,6 +1,6 @@
 {
   "name": "note-api",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Expose a localhost HTTP API to view, create, edit and delete vault notes.",
   "main": "main.js",
   "scripts": {
