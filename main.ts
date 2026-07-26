@@ -387,19 +387,18 @@ export default class NoteBridgePlugin extends Plugin {
 		const withContent = url.searchParams.get('content') === '1';
 		const limitParam = Number.parseInt(url.searchParams.get('limit') ?? '', 10);
 		const limit = Number.isInteger(limitParam) && limitParam > 0 ? Math.min(limitParam, 500) : 0;
+		const offsetParam = Number.parseInt(url.searchParams.get('offset') ?? '', 10);
+		const offset = Number.isInteger(offsetParam) && offsetParam > 0 ? offsetParam : 0;
 		const notes: NoteSummary[] = [];
 		for (const file of this.app.vault.getMarkdownFiles()) {
 			if (folder && !file.path.startsWith(folder)) {
 				continue;
 			}
-			if (limit && notes.length >= limit) {
-				break;
-			}
 			const pathMatches = !query
 				|| file.path.toLowerCase().includes(query)
 				|| file.basename.toLowerCase().includes(query);
 			let content: string | undefined;
-			if (withContent || (query && !pathMatches)) {
+			if (query && !pathMatches) {
 				content = await this.app.vault.cachedRead(file);
 			}
 			if (!pathMatches && !(content && content.toLowerCase().includes(query))) {
@@ -412,12 +411,14 @@ export default class NoteBridgePlugin extends Plugin {
 				size: file.stat.size,
 			};
 			if (withContent) {
-				summary.content = content;
+				summary.content = content ?? (await this.app.vault.cachedRead(file));
 			}
 			notes.push(summary);
 		}
 		notes.sort((a, b) => b.mtime - a.mtime);
-		this.sendJson(res, 200, { notes });
+		const total = notes.length;
+		const page = offset ? notes.slice(offset, limit ? offset + limit : undefined) : limit ? notes.slice(0, limit) : notes;
+		this.sendJson(res, 200, { notes: page, total });
 	}
 
 	private readDailyNotesConfig(res: ServerResponse) {
