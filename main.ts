@@ -191,8 +191,7 @@ export default class NoteBridgePlugin extends Plugin {
 			this.sendJson(res, 400, { error: 'Invalid folder' });
 			return;
 		}
-		const body = await this.readBody(req);
-		const data = Buffer.from(body, 'binary');
+		const data = await this.readBodyBuffer(req);
 		if (data.length === 0) {
 			this.sendJson(res, 400, { error: 'Empty body' });
 			return;
@@ -205,7 +204,7 @@ export default class NoteBridgePlugin extends Plugin {
 			const ext = dot > 0 ? safeName.slice(dot) : '';
 			target = `${folder}/${stem}-${Date.now()}${ext}`;
 		}
-		const arrayBuffer: ArrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.length);
+		const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.length) as ArrayBuffer;
 		const file = await this.app.vault.createBinary(target, arrayBuffer);
 		this.sendJson(res, 201, { path: file.path });
 	}
@@ -268,6 +267,10 @@ export default class NoteBridgePlugin extends Plugin {
 	}
 
 	private readBody(req: IncomingMessage): Promise<string> {
+		return this.readBodyBuffer(req).then((buf) => buf.toString('utf8'));
+	}
+
+	private readBodyBuffer(req: IncomingMessage): Promise<Buffer> {
 		return new Promise((resolve, reject) => {
 			const chunks: Buffer[] = [];
 			let size = 0;
@@ -281,7 +284,7 @@ export default class NoteBridgePlugin extends Plugin {
 				chunks.push(chunk);
 			});
 			req.on('end', () => {
-				resolve(Buffer.concat(chunks).toString('utf8'));
+				resolve(Buffer.concat(chunks));
 			});
 			req.on('error', reject);
 		});
@@ -343,7 +346,7 @@ export default class NoteBridgePlugin extends Plugin {
 
 			const publicAssetPrefix = '/assets/';
 			if (method === 'GET' && path.startsWith(publicAssetPrefix)) {
-				await this.serveAsset(res, decodeURIComponent(path));
+				await this.serveAsset(res, decodeURIComponent(path.slice(1)));
 				return;
 			}
 
