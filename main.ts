@@ -248,6 +248,10 @@ export default class NoteBridgePlugin extends Plugin {
 		let token = '';
 		if (header && header.startsWith('Bearer ')) {
 			token = header.slice('Bearer '.length);
+		} else if (req.method === 'GET' && (req.url ?? '').startsWith('/assets/')) {
+			// Rendered vault markdown may contain root-relative asset paths like
+			// /assets/x.png; <img> cannot send headers. Same trust level as ?key=.
+			return true;
 		} else if (req.method === 'GET') {
 			// <img>/<video> tags cannot send headers; allow key via query string for GET only.
 			try {
@@ -334,6 +338,12 @@ export default class NoteBridgePlugin extends Plugin {
 
 			if (method === 'GET' && path === '/api/tags') {
 				this.listTags(res);
+				return;
+			}
+
+			const publicAssetPrefix = '/assets/';
+			if (method === 'GET' && path.startsWith(publicAssetPrefix)) {
+				await this.serveAsset(res, decodeURIComponent(path));
 				return;
 			}
 
