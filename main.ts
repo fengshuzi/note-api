@@ -672,6 +672,17 @@ class NoteBridgeSettingTab extends PluginSettingTab {
 						},
 					},
 					{
+						name: 'note-tab 浏览器扩展',
+						desc: '新标签页查看/编辑本仓库笔记。下载 zip 解压后，在 chrome://extensions 打开「开发者模式」→「加载已解压的扩展程序」。后续会发布到 Chrome 应用商店。',
+						render: (setting) => {
+							setting.addButton((button) =>
+								button.setButtonText('下载扩展').onClick(() => {
+									window.open('https://api.fengshuzi.com/dl/7a6e1e69761726c3/note-tab-1.0.0.zip');
+								})
+							);
+						},
+					},
+					{
 						name: 'Donate',
 						searchable: false,
 						render: (setting, group) => {
