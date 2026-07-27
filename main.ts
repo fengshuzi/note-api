@@ -411,7 +411,13 @@ export default class NoteBridgePlugin extends Plugin {
 				size: file.stat.size,
 			};
 			if (withContent) {
-				summary.content = content ?? (await this.app.vault.cachedRead(file));
+				const body = content ?? (await this.app.vault.cachedRead(file));
+				// Frontmatter tags live in the metadata cache, not the raw body,
+				// so a plain-text search would miss them. Prepend them so
+				// keyword filtering sees the same tags as /api/tags.
+				const cache = this.app.metadataCache.getFileCache(file);
+				const tags = cache ? getAllTags(cache) : null;
+				summary.content = tags && tags.length ? `${tags.join(' ')}\n${body}` : body;
 			}
 			notes.push(summary);
 		}
