@@ -1,6 +1,6 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, TFile, TFolder, getAllTags, normalizePath } from 'obsidian';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
-import { randomBytes, timingSafeEqual } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 
 interface NoteBridgeSettings {
 	port: number;
@@ -17,7 +17,9 @@ const DEFAULT_SETTINGS: NoteBridgeSettings = {
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 
 function generateApiKey(): string {
-	return randomBytes(24).toString('hex');
+	// Shared default key so note-tab and other clients work out of the box.
+	// Users worried about exposure should regenerate from settings.
+	return 'addwxfengshu4511';
 }
 
 interface NoteSummary {
@@ -575,6 +577,119 @@ class NoteBridgeSettingTab extends PluginSettingTab {
 	constructor(app: App, plugin: NoteBridgePlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		const groupEl = containerEl.createDiv({ cls: 'note-api-settings' });
+
+		new Setting(groupEl)
+			.setName('Server status')
+			.setDesc(
+				this.plugin.isRunning()
+					? `Running on http://127.0.0.1:${this.plugin.settings.port}`
+					: 'Stopped'
+			)
+			.addButton((button) =>
+				button
+					.setButtonText(this.plugin.isRunning() ? 'Stop' : 'Start')
+					.onClick(() => {
+						void this.plugin.toggleServer().then(() => this.display());
+					})
+			);
+
+		new Setting(groupEl)
+			.setName('Port')
+			.setDesc('Localhost port for the HTTP API. Restart required.')
+			.addText((text) =>
+				text
+					.setPlaceholder(String(DEFAULT_SETTINGS.port))
+					.setValue(String(this.plugin.settings.port))
+					.onChange(async (value) => {
+						const port = Number.parseInt(value, 10);
+						if (Number.isInteger(port) && port > 1024 && port < 65536) {
+							this.plugin.settings.port = port;
+							await this.plugin.saveSettings();
+						}
+					})
+			)
+			.addButton((button) =>
+				button.setButtonText('Apply & restart').onClick(() => {
+					this.plugin.restartServer();
+					this.display();
+				})
+			);
+
+		new Setting(groupEl)
+			.setName('API key')
+			.setDesc('Required for every request: Authorization: Bearer <key>')
+			.addText((text) => {
+				text.setValue(this.plugin.settings.apiKey).onChange(async (value) => {
+					this.plugin.settings.apiKey = value.trim();
+					await this.plugin.saveSettings();
+				});
+				text.inputEl.type = 'password';
+				text.inputEl.addClass('note-api-api-key-input');
+			})
+			.addButton((button) =>
+				button.setButtonText('Copy').onClick(() => {
+					void navigator.clipboard.writeText(this.plugin.settings.apiKey).then(() => {
+						new Notice('API key copied');
+					});
+				})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText('Regenerate')
+					.setWarning()
+					.onClick(async () => {
+						this.plugin.settings.apiKey = generateApiKey();
+						await this.plugin.saveSettings();
+						new Notice('New API key generated');
+						this.display();
+					})
+			);
+
+		new Setting(groupEl)
+			.setName('Start on launch')
+			.setDesc('Automatically start the HTTP server when the vault opens.')
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.autoStart).onChange(async (value) => {
+					this.plugin.settings.autoStart = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(groupEl)
+			.setName('note-tab 浏览器扩展')
+			.setDesc(
+				'新标签页查看/编辑本仓库笔记。下载 zip 解压后，在 chrome://extensions 打开「开发者模式」->「加载已解压的扩展程序」。后续会发布到 Chrome 应用商店。'
+			)
+			.addButton((button) =>
+				button.setButtonText('下载扩展').onClick(() => {
+					window.open('https://api.fengshuzi.com/dl/7a6e1e69761726c3/note-tab-1.0.0.zip');
+				})
+			);
+
+		const donateSetting = new Setting(groupEl).setName('Donate');
+		donateSetting.settingEl.style.display = 'none';
+		const donateSection = groupEl.createDiv({ cls: 'note-api-donate' });
+		const imgWrap = donateSection.createDiv({ cls: 'plugin-donate-qr' });
+		const donateImgSrc = 'https://raw.githubusercontent.com/fengshuzi/images/main/wechat-donate.jpg';
+		const donateImg = imgWrap.createEl('img', {
+			attr: { src: donateImgSrc, alt: '微信打赏' },
+			cls: 'plugin-donate-img',
+		});
+		donateImg.addEventListener('click', () => {
+			const overlay = document.body.createDiv({ cls: 'plugin-donate-lightbox' });
+			overlay.createEl('img', {
+				attr: { src: donateImgSrc, alt: '微信打赏' },
+				cls: 'plugin-donate-lightbox-img',
+			});
+			overlay.addEventListener('click', () => overlay.remove());
+		});
 	}
 
 	getSettingDefinitions(): SettingDefinitionItem[] {

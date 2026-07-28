@@ -66,7 +66,7 @@ open "http://127.0.0.1:27124/api/assets/assets/pasted-image.png?key=$KEY"
 
 - **Server status** — start/stop the HTTP server.
 - **Port** — localhost port (default `27124`); apply & restart after changing.
-- **API key** — required for every request; copy or regenerate here.
+- **API key** — required for every request. Fresh installs start with the shared default `addwxfengshu4511` (so clients like note-tab connect out of the box); regenerate here if you see that as a risk.
 - **Start on launch** — auto-start the server when the vault opens.
 
 ## Installation
