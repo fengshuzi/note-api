@@ -34,6 +34,7 @@ All endpoints require `Authorization: Bearer <api-key>`. For `GET` requests the 
 | GET | `/api/assets/<path>` | Serve a vault file as binary (images, PDF, audio, video). |
 | POST | `/api/assets?filename=<name>&folder=assets` | Upload raw bytes (`Content-Type: application/octet-stream`) as a vault file. Defaults to `assets/`; auto-renames on conflict. |
 | GET | `/api/daily-notes/config` | Daily-notes folder + filename format. |
+| GET | `/api/journals?limit=&offset=` | List journal entries only: files in the daily-notes folder whose basename parses as a date in the configured format, sorted by that date desc. `limit` defaults to 50 (max 500). Response includes `total`, `folder`, and `format`. |
 
 ### Examples
 

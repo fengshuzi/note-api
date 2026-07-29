@@ -1,4 +1,4 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, TFile, TFolder, getAllTags, normalizePath } from 'obsidian';
+import { App, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, TFile, TFolder, getAllTags, moment, normalizePath } from 'obsidian';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { timingSafeEqual } from 'crypto';
 
@@ -28,6 +28,11 @@ interface NoteSummary {
 	mtime: number;
 	size: number;
 	content?: string;
+}
+
+interface DailyNotesConfig {
+	folder: string;
+	format: string;
 }
 
 interface CreateNoteBody {
@@ -321,7 +326,12 @@ export default class NoteBridgePlugin extends Plugin {
 			}
 
 			if (method === 'GET' && path === '/api/daily-notes/config') {
-				this.readDailyNotesConfig(res);
+				await this.readDailyNotesConfig(res);
+				return;
+			}
+
+			if (method === 'GET' && path === '/api/journals') {
+				await this.listJournals(res, url);
 				return;
 			}
 
@@ -429,24 +439,56 @@ export default class NoteBridgePlugin extends Plugin {
 		this.sendJson(res, 200, { notes: page, total });
 	}
 
-	private readDailyNotesConfig(res: ServerResponse) {
-		let folder = 'journals';
-		let format = 'YYYY-MM-DD';
-		this.app.vault.adapter
-			.read(`${this.app.vault.configDir}/daily-notes.json`)
-			.then((raw) => {
-				try {
-					const parsed = JSON.parse(raw) as { folder?: unknown; format?: unknown };
-					if (typeof parsed.folder === 'string' && parsed.folder) folder = parsed.folder;
-					if (typeof parsed.format === 'string' && parsed.format) format = parsed.format;
-				} catch {
-					// keep defaults
-				}
-				this.sendJson(res, 200, { folder, format });
-			})
-			.catch(() => {
-				this.sendJson(res, 200, { folder, format });
+	private async readDailyNotesConfigValues(): Promise<DailyNotesConfig> {
+		const config: DailyNotesConfig = { folder: 'journals', format: 'YYYY-MM-DD' };
+		try {
+			const raw = await this.app.vault.adapter.read(`${this.app.vault.configDir}/daily-notes.json`);
+			const parsed = JSON.parse(raw) as { folder?: unknown; format?: unknown };
+			if (typeof parsed.folder === 'string' && parsed.folder) config.folder = parsed.folder;
+			if (typeof parsed.format === 'string' && parsed.format) config.format = parsed.format;
+		} catch {
+			// keep defaults
+		}
+		return config;
+	}
+
+	private async readDailyNotesConfig(res: ServerResponse) {
+		const config = await this.readDailyNotesConfigValues();
+		this.sendJson(res, 200, config);
+	}
+
+	// Journal entries live in the configured daily-notes folder, but that
+	// folder can also hold other files — a note only counts as a journal when
+	// its basename parses as a date in the configured format. Sorted by that
+	// date desc (not mtime) and paged server-side.
+	private async listJournals(res: ServerResponse, url: URL) {
+		const config = await this.readDailyNotesConfigValues();
+		const folder = config.folder.replace(/\/+$/, '');
+		const limitParam = Number.parseInt(url.searchParams.get('limit') ?? '', 10);
+		const limit = Number.isInteger(limitParam) && limitParam > 0 ? Math.min(limitParam, 500) : 50;
+		const offsetParam = Number.parseInt(url.searchParams.get('offset') ?? '', 10);
+		const offset = Number.isInteger(offsetParam) && offsetParam > 0 ? offsetParam : 0;
+		const journals: { path: string; name: string; mtime: number; size: number; date: number }[] = [];
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			if (folder && !file.path.startsWith(`${folder}/`)) {
+				continue;
+			}
+			const date = moment(file.basename, config.format, true);
+			if (!date.isValid()) {
+				continue;
+			}
+			journals.push({
+				path: file.path,
+				name: file.basename,
+				mtime: file.stat.mtime,
+				size: file.stat.size,
+				date: date.valueOf(),
 			});
+		}
+		journals.sort((a, b) => b.date - a.date || (a.path < b.path ? -1 : 1));
+		const total = journals.length;
+		const page = journals.slice(offset, offset + limit).map(({ date, ...summary }) => summary);
+		this.sendJson(res, 200, { notes: page, total, folder, format: config.format });
 	}
 
 	private resolveNotePath(rawPath: string): string | null {
