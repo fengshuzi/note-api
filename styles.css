@@ -3,6 +3,10 @@
     font-family: var(--font-monospace);
 }
 
+.setting-item.note-api-hidden {
+    display: none;
+}
+
 .note-api-donate {
     margin-top: 24px;
 }

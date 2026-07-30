@@ -1,7 +1,7 @@
 {
   "id": "note-api",
   "name": "Note API",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "minAppVersion": "1.13.0",
   "description": "Expose a localhost HTTP API (API-key protected) to view, create, edit and delete vault notes.",
   "author": "lizhifeng",
