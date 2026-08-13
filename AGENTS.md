@@ -30,7 +30,7 @@ npm run release  # gh release create from manifest.json version
 ## Architecture
 
 - Exposes HTTP API on `127.0.0.1:27124` by default
-- API key stored in plugin settings; default key `addwxfengshu4511` matches note-tab's default
+- API key stored in plugin settings; default key matches note-tab's default
 - Endpoints: `/api/status`, `/api/notes`, `/api/note/{path}`, `/api/search`, `/api/reminders`
 - See `note-tab/AGENTS.md` for the client-side integration
 
