@@ -35,6 +35,14 @@ All endpoints require `Authorization: Bearer <api-key>`. For `GET` requests the 
 | POST | `/api/assets?filename=<name>&folder=assets` | Upload raw bytes (`Content-Type: application/octet-stream`) as a vault file. Defaults to `assets/`; auto-renames on conflict. |
 | GET | `/api/daily-notes/config` | Daily-notes folder + filename format. |
 | GET | `/api/journals?limit=&offset=` | List journal entries only: files in the daily-notes folder whose basename parses as a date in the configured format, sorted by that date desc. `limit` defaults to 50 (max 500). Response includes `total`, `folder`, and `format`. |
+| GET | `/api/reminders?list=<name>` | List incomplete macOS Reminders (via EventKit/JXA, **macOS only**, requires the "Reminders API" setting, off by default) in the given list (default `Inbox`), sorted by due date asc. Response includes `reminders` (`{id, title, list, due?}`) and all `lists`. Disabled or non-macOS hosts return 404/501 so clients can hide the feature. |
+| POST | `/api/reminders` | Create a reminder. Body: `{"title": "...", "due": "2026-08-13T15:00", "list": "Inbox"}` (`due`/`list` optional). |
+| PUT | `/api/reminders/<id>` | Update a reminder. Body: `{"title": "...", "due": "..." or null}` — a missing/null `due` clears the date. Body `{"completed": true}` marks it done instead. |
+| DELETE | `/api/reminders/<id>` | Delete a reminder. |
+| GET | `/api/calendar?start=<iso>&end=<iso>` | List macOS Calendar events in `[start, end)` (via EventKit/JXA, **macOS only**, same "Reminders API" setting, off by default; default window: today +3 days). Response includes `events` (`{id, title, calendar, start, end, allDay, location?, notes?}`) and all `calendars`. Disabled or non-macOS hosts return 404/501 so clients can hide the feature. |
+| POST | `/api/calendar` | Create an event. Body: `{"title": "...", "start": "2026-08-13T15:00", "end": "...", "calendar": "工作"}` (`end` defaults to +1h; `calendar` optional, falls back to the default calendar). |
+| PUT | `/api/calendar/<id>` | Update an event. Body: `{"title": "...", "start": "...", "end": "..."}` (`end` defaults to +1h). |
+| DELETE | `/api/calendar/<id>` | Delete an event. |
 
 ### Examples
 

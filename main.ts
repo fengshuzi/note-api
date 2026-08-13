@@ -1,17 +1,27 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, TFile, TFolder, getAllTags, moment, normalizePath } from 'obsidian';
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { timingSafeEqual } from 'crypto';
+import { completeReminder, createReminder, deleteReminder, listReminderLists, listReminders, updateReminder } from './reminders';
+import {
+	createCalendarEvent as createCalendarEventInStore,
+	deleteCalendarEvent as deleteCalendarEventInStore,
+	listCalendarEvents as listCalendarEventsFromStore,
+	listCalendarNames,
+	updateCalendarEvent as updateCalendarEventInStore,
+} from './calendar';
 
 interface NoteBridgeSettings {
 	port: number;
 	apiKey: string;
 	autoStart: boolean;
+	enableReminders: boolean;
 }
 
 const DEFAULT_SETTINGS: NoteBridgeSettings = {
 	port: 27124,
 	apiKey: '',
 	autoStart: true,
+	enableReminders: false,
 };
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -42,6 +52,31 @@ interface CreateNoteBody {
 
 interface UpdateNoteBody {
 	content?: unknown;
+}
+
+interface CreateReminderBody {
+	title?: unknown;
+	due?: unknown;
+	list?: unknown;
+}
+
+interface UpdateReminderBody {
+	title?: unknown;
+	due?: unknown;
+	completed?: unknown;
+}
+
+interface CreateCalendarEventBody {
+	title?: unknown;
+	start?: unknown;
+	end?: unknown;
+	calendar?: unknown;
+}
+
+interface UpdateCalendarEventBody {
+	title?: unknown;
+	start?: unknown;
+	end?: unknown;
 }
 
 export default class NoteBridgePlugin extends Plugin {
@@ -79,6 +114,7 @@ export default class NoteBridgePlugin extends Plugin {
 				port: typeof partial.port === 'number' ? partial.port : DEFAULT_SETTINGS.port,
 				apiKey: typeof partial.apiKey === 'string' ? partial.apiKey : '',
 				autoStart: typeof partial.autoStart === 'boolean' ? partial.autoStart : DEFAULT_SETTINGS.autoStart,
+				enableReminders: typeof partial.enableReminders === 'boolean' ? partial.enableReminders : DEFAULT_SETTINGS.enableReminders,
 			};
 		}
 	}
@@ -249,6 +285,203 @@ export default class NoteBridgePlugin extends Plugin {
 		this.sendJson(res, 200, { tags });
 	}
 
+	// Reminders handlers delegate to reminders.ts (macOS EventKit via JXA).
+	// "Reminder not found" maps to 404, the macOS-only guard to 501, anything
+	// else falls through to the generic 500 in handleRequest.
+	private async withReminderErrors(res: ServerResponse, fn: () => Promise<void>) {
+		try {
+			await fn();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (message === 'Reminder not found') {
+				this.sendJson(res, 404, { error: message });
+				return;
+			}
+			if (message.includes('only available on macOS')) {
+				this.sendJson(res, 501, { error: message });
+				return;
+			}
+			throw err;
+		}
+	}
+
+	private async listReminders(res: ServerResponse, url: URL) {
+		await this.withReminderErrors(res, async () => {
+			const list = url.searchParams.get('list') ?? undefined;
+			const [reminders, lists] = await Promise.all([listReminders(list), listReminderLists()]);
+			this.sendJson(res, 200, { reminders, lists });
+		});
+	}
+
+	private async createReminder(req: IncomingMessage, res: ServerResponse) {
+		const body = await this.readBody(req);
+		let parsed: CreateReminderBody;
+		try {
+			parsed = JSON.parse(body) as CreateReminderBody;
+		} catch {
+			this.sendJson(res, 400, { error: 'Invalid JSON body' });
+			return;
+		}
+		if (typeof parsed.title !== 'string' || !parsed.title.trim()) {
+			this.sendJson(res, 400, { error: 'Missing "title" string field' });
+			return;
+		}
+		const title = parsed.title.trim();
+		const due = typeof parsed.due === 'string' && parsed.due ? parsed.due : undefined;
+		const list = typeof parsed.list === 'string' ? parsed.list : undefined;
+		await this.withReminderErrors(res, async () => {
+			await createReminder(title, list, due);
+			this.sendJson(res, 201, { ok: true });
+		});
+	}
+
+	private async updateReminder(req: IncomingMessage, res: ServerResponse, id: string) {
+		if (!id) {
+			this.sendJson(res, 400, { error: 'Missing reminder id' });
+			return;
+		}
+		const body = await this.readBody(req);
+		let parsed: UpdateReminderBody;
+		try {
+			parsed = JSON.parse(body) as UpdateReminderBody;
+		} catch {
+			this.sendJson(res, 400, { error: 'Invalid JSON body' });
+			return;
+		}
+		await this.withReminderErrors(res, async () => {
+			if (parsed.completed === true) {
+				await completeReminder(id);
+			} else {
+				if (typeof parsed.title !== 'string' || !parsed.title.trim()) {
+					this.sendJson(res, 400, { error: 'Missing "title" string field' });
+					return;
+				}
+				const due = typeof parsed.due === 'string' && parsed.due ? parsed.due : undefined;
+				await updateReminder(id, parsed.title.trim(), due);
+			}
+			this.sendJson(res, 200, { ok: true });
+		});
+	}
+
+	private async deleteReminder(res: ServerResponse, id: string) {
+		if (!id) {
+			this.sendJson(res, 400, { error: 'Missing reminder id' });
+			return;
+		}
+		await this.withReminderErrors(res, async () => {
+			await deleteReminder(id);
+			this.sendJson(res, 200, { ok: true });
+		});
+	}
+
+	// Calendar handlers delegate to calendar.ts (macOS EventKit via JXA).
+	// "Event not found" maps to 404, the macOS-only guard to 501, anything
+	// else falls through to the generic 500 in handleRequest.
+	private async withCalendarErrors(res: ServerResponse, fn: () => Promise<void>) {
+		try {
+			await fn();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (message === 'Event not found') {
+				this.sendJson(res, 404, { error: message });
+				return;
+			}
+			if (message.includes('only available on macOS')) {
+				this.sendJson(res, 501, { error: message });
+				return;
+			}
+			throw err;
+		}
+	}
+
+	private async listCalendarEvents(res: ServerResponse, url: URL) {
+		await this.withCalendarErrors(res, async () => {
+			const startParam = url.searchParams.get('start');
+			const endParam = url.searchParams.get('end');
+			// Default: 3 days starting today (same window as lite-calendar).
+			const start = startParam || new Date().toISOString();
+			const end = endParam || new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+			const [events, calendars] = await Promise.all([
+				listCalendarEventsFromStore(start, end),
+				listCalendarNames(),
+			]);
+			this.sendJson(res, 200, { events, calendars });
+		});
+	}
+
+	private async createCalendarEvent(req: IncomingMessage, res: ServerResponse) {
+		const body = await this.readBody(req);
+		let parsed: CreateCalendarEventBody;
+		try {
+			parsed = JSON.parse(body) as CreateCalendarEventBody;
+		} catch {
+			this.sendJson(res, 400, { error: 'Invalid JSON body' });
+			return;
+		}
+		if (typeof parsed.title !== 'string' || !parsed.title.trim()) {
+			this.sendJson(res, 400, { error: 'Missing "title" string field' });
+			return;
+		}
+		if (typeof parsed.start !== 'string' || !parsed.start) {
+			this.sendJson(res, 400, { error: 'Missing "start" string field' });
+			return;
+		}
+		const title = parsed.title.trim();
+		const start = parsed.start;
+		// Default to a 1-hour event when no end is given.
+		const end = typeof parsed.end === 'string' && parsed.end
+			? parsed.end
+			: new Date(new Date(parsed.start).getTime() + 60 * 60 * 1000).toISOString();
+		const calendar = typeof parsed.calendar === 'string' ? parsed.calendar : undefined;
+		await this.withCalendarErrors(res, async () => {
+			await createCalendarEventInStore(calendar || '', title, start, end);
+			this.sendJson(res, 201, { ok: true });
+		});
+	}
+
+	private async updateCalendarEvent(req: IncomingMessage, res: ServerResponse, id: string) {
+		if (!id) {
+			this.sendJson(res, 400, { error: 'Missing event id' });
+			return;
+		}
+		const body = await this.readBody(req);
+		let parsed: UpdateCalendarEventBody;
+		try {
+			parsed = JSON.parse(body) as UpdateCalendarEventBody;
+		} catch {
+			this.sendJson(res, 400, { error: 'Invalid JSON body' });
+			return;
+		}
+		if (typeof parsed.title !== 'string' || !parsed.title.trim()) {
+			this.sendJson(res, 400, { error: 'Missing "title" string field' });
+			return;
+		}
+		if (typeof parsed.start !== 'string' || !parsed.start) {
+			this.sendJson(res, 400, { error: 'Missing "start" string field' });
+			return;
+		}
+		const eventTitle = parsed.title.trim();
+		const eventStart = parsed.start;
+		const eventEnd = typeof parsed.end === 'string' && parsed.end
+			? parsed.end
+			: new Date(new Date(parsed.start).getTime() + 60 * 60 * 1000).toISOString();
+		await this.withCalendarErrors(res, async () => {
+			await updateCalendarEventInStore(id, eventTitle, eventStart, eventEnd);
+			this.sendJson(res, 200, { ok: true });
+		});
+	}
+
+	private async deleteCalendarEvent(res: ServerResponse, id: string) {
+		if (!id) {
+			this.sendJson(res, 400, { error: 'Missing event id' });
+			return;
+		}
+		await this.withCalendarErrors(res, async () => {
+			await deleteCalendarEventInStore(id);
+			this.sendJson(res, 200, { ok: true });
+		});
+	}
+
 	private isAuthorized(req: IncomingMessage): boolean {
 		const header = req.headers.authorization;
 		let token = '';
@@ -353,6 +586,80 @@ export default class NoteBridgePlugin extends Plugin {
 
 			if (method === 'GET' && path === '/api/tags') {
 				this.listTags(res);
+				return;
+			}
+
+			if (method === 'GET' && path === '/api/reminders') {
+				if (!this.settings.enableReminders) {
+					this.sendJson(res, 404, { error: 'Reminders API is disabled (enable it in Note API settings)' });
+					return;
+				}
+				await this.listReminders(res, url);
+				return;
+			}
+
+			if (method === 'GET' && path === '/api/calendar') {
+				if (!this.settings.enableReminders) {
+					this.sendJson(res, 404, { error: 'Calendar API is disabled (enable "Reminders API" in Note API settings)' });
+					return;
+				}
+				await this.listCalendarEvents(res, url);
+				return;
+			}
+
+			if (method === 'POST' && path === '/api/calendar') {
+				if (!this.settings.enableReminders) {
+					this.sendJson(res, 404, { error: 'Calendar API is disabled (enable "Reminders API" in Note API settings)' });
+					return;
+				}
+				await this.createCalendarEvent(req, res);
+				return;
+			}
+
+			const calendarPrefix = '/api/calendar/';
+			if (path.startsWith(calendarPrefix)) {
+				if (!this.settings.enableReminders) {
+					this.sendJson(res, 404, { error: 'Calendar API is disabled (enable "Reminders API" in Note API settings)' });
+					return;
+				}
+				const eventId = decodeURIComponent(path.slice(calendarPrefix.length));
+				if (method === 'PUT') {
+					await this.updateCalendarEvent(req, res, eventId);
+					return;
+				}
+				if (method === 'DELETE') {
+					await this.deleteCalendarEvent(res, eventId);
+					return;
+				}
+				this.sendJson(res, 405, { error: 'Method not allowed' });
+				return;
+			}
+
+			if (method === 'POST' && path === '/api/reminders') {
+				if (!this.settings.enableReminders) {
+					this.sendJson(res, 404, { error: 'Reminders API is disabled (enable it in Note API settings)' });
+					return;
+				}
+				await this.createReminder(req, res);
+				return;
+			}
+
+			const reminderPrefix = '/api/reminders/';
+			if (path.startsWith(reminderPrefix)) {
+				if (!this.settings.enableReminders) {
+					this.sendJson(res, 404, { error: 'Reminders API is disabled (enable it in Note API settings)' });
+					return;
+				}
+				const reminderId = decodeURIComponent(path.slice(reminderPrefix.length));
+				if (method === 'PUT') {
+					await this.updateReminder(req, res, reminderId);
+					return;
+				}
+				if (method === 'DELETE') {
+					await this.deleteReminder(res, reminderId);
+					return;
+				}
+				this.sendJson(res, 405, { error: 'Method not allowed' });
 				return;
 			}
 
@@ -719,12 +1026,24 @@ class NoteBridgeSettingTab extends PluginSettingTab {
 						},
 					},
 					{
+						name: 'Reminders API (macOS)',
+					desc: 'Expose /api/reminders and /api/calendar endpoints that read and write macOS Reminders and Calendar via EventKit. Off by default; macOS only.',
+						render: (setting) => {
+							setting.addToggle((toggle) =>
+								toggle.setValue(this.plugin.settings.enableReminders).onChange(async (value) => {
+									this.plugin.settings.enableReminders = value;
+									await this.plugin.saveSettings();
+								})
+							);
+						},
+					},
+					{
 						name: 'note-tab 浏览器扩展',
 						desc: '新标签页查看/编辑本仓库笔记。下载 zip 解压后，在 chrome://extensions 打开「开发者模式」→「加载已解压的扩展程序」。后续会发布到 Chrome 应用商店。',
 						render: (setting) => {
 							setting.addButton((button) =>
 								button.setButtonText('下载扩展').onClick(() => {
-									window.open('https://api.fengshuzi.com/dl/7a6e1e69761726c3/note-tab-1.0.0.zip');
+									window.open('https://api.fengshuzi.com/dl/1c407c0ead81a88f/note-tab-1.0.1.zip');
 								})
 							);
 						},
